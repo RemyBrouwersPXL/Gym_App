@@ -1,0 +1,30 @@
+# Builds an unsigned .ipa on a macOS runner (no Mac or Apple dev account needed).
+# Run it from the GitHub "Actions" tab, then download the GymApp-unsigned artifact.
+name: iOS unsigned build
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --legacy-peer-deps
+      - run: npx expo prebuild --platform ios --clean
+      - name: Build (no code signing)
+        run: |
+          xcodebuild -workspace ios/GymApp.xcworkspace -scheme GymApp \
+            -configuration Release -sdk iphoneos -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+      - name: Package .ipa
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/GymApp.app Payload/
+          zip -qr GymApp-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GymApp-unsigned
+          path: GymApp-unsigned.ipa
