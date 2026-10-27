@@ -1,0 +1,84 @@
+# Unsigned iOS builds on a GitHub macOS runner — no Mac or paid Apple Developer account needed.
+# Run it from the GitHub "Actions" tab, then download the artifacts from the run's summary page.
+#   GymApp-unsigned-ipa  -> .ipa for sideloading (Sideloadly / AltStore re-sign it with a free Apple ID)
+#   GymApp-simulator     -> .app for the iOS Simulator (needs a Mac to run)
+name: iOS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: What to build
+        type: choice
+        options: [device, simulator, both]
+        default: device
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [device, simulator]
+    steps:
+      - name: Skip targets that weren't requested
+        id: gate
+        run: echo "run=${{ inputs.target == 'both' || inputs.target == matrix.target }}" >> "$GITHUB_OUTPUT"
+
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v5
+
+      # Expo SDK 58 requires Xcode 26.4+.
+      - if: steps.gate.outputs.run == 'true'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # Expo SDK 58 requires Node 22.13+.
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - if: steps.gate.outputs.run == 'true'
+        run: npm ci
+
+      # Generates ios/ from app.json (Continuous Native Generation) and runs pod install.
+      - if: steps.gate.outputs.run == 'true'
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Build for device (no code signing)
+        if: steps.gate.outputs.run == 'true' && matrix.target == 'device'
+        run: |
+          xcodebuild -workspace ios/GymApp.xcworkspace -scheme GymApp \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/GymApp.app Payload/
+          zip -qry GymApp-unsigned.ipa Payload
+
+      - name: Build for iOS Simulator
+        if: steps.gate.outputs.run == 'true' && matrix.target == 'simulator'
+        run: |
+          xcodebuild -workspace ios/GymApp.xcworkspace -scheme GymApp \
+            -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build
+          cd build/Build/Products/Release-iphonesimulator
+          zip -qry "$GITHUB_WORKSPACE/GymApp-simulator.zip" GymApp.app
+
+      - if: steps.gate.outputs.run == 'true' && matrix.target == 'device'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GymApp-unsigned-ipa
+          path: GymApp-unsigned.ipa
+          retention-days: 14
+
+      - if: steps.gate.outputs.run == 'true' && matrix.target == 'simulator'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GymApp-simulator
+          path: GymApp-simulator.zip
+          retention-days: 14
